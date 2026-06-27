@@ -1,84 +1,64 @@
 import { z } from "zod";
-import { ask } from "../llm/ollama.ts";
-import type { AgentState, EvaluationResult } from "./types.ts";
+import { askJSON } from "../llm/ollama.ts";
+import type { AgentState, EvaluationResult, SubGoal } from "./types.ts";
 
-export function evaluateGoalHeuristic(
-  goal: string,
-  state: Pick<AgentState, "history" | "lastResult" | "steps" | "memories">,
-): EvaluationResult {
-  const normalizedGoal = goal.toLowerCase();
-  const lastResult = state.lastResult.toLowerCase();
-
-  if (
-    (normalizedGoal.includes("create") || normalizedGoal.includes("write") || normalizedGoal.includes("save")) &&
-    (lastResult.includes("wrote file") || lastResult.includes("saved note") || lastResult.includes("created"))
-  ) {
-    return {
-      completed: true,
-      reason: "The requested file operation completed successfully.",
-    };
-  }
-
-  if (
-    normalizedGoal.includes("read") &&
-    (lastResult.includes("failed to read") || lastResult.includes("truncated to") || lastResult.length > 0)
-  ) {
-    return {
-      completed: true,
-      reason: "The requested read operation completed.",
-    };
-  }
-
-  return {
-    completed: false,
-    reason: "The task still needs more evidence.",
-  };
-}
+// ── Schema ──────────────────────────────────────────────────────────
 
 const evaluationSchema = z.object({
-  completed: z.boolean(),
-  reason: z.string().min(1),
+	completed: z.boolean(),
+	quality: z.number().min(0).max(1),
+	reason: z.string().min(1),
+	missingInfo: z.array(z.string()).optional(),
 });
 
-function extractJson(text: string): string {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error(`Evaluator did not return JSON. Raw output: ${text}`);
-  }
-
-  return text.slice(start, end + 1);
-}
+// ── Evaluator ───────────────────────────────────────────────────────
 
 export async function evaluator(
-  goal: string,
-  state: Pick<AgentState, "history" | "lastResult" | "steps" | "memories">,
+	state: AgentState,
+	currentSubGoal: SubGoal,
 ): Promise<EvaluationResult> {
-  const heuristic = evaluateGoalHeuristic(goal, state);
-  if (heuristic.completed) {
-    return heuristic;
-  }
+	const factsGathered =
+		state.worldModel.facts.length > 0
+			? state.worldModel.facts.map((f) => `  • ${f}`).join("\n")
+			: "  (none)";
 
-  const response = await ask(`You are an evaluator for a CLI agent.
-Goal:\n${goal}
+	const messages = [
+		{
+			role: "system" as const,
+			content: `You are an evaluator for an AI research agent. Determine whether the current sub-goal has been adequately completed.
 
-Current information:\n${state.history.join("\n") || "(none)"}
+Scoring guide:
+- quality 0.0-0.3: Very little progress, most information is missing
+- quality 0.3-0.6: Partial progress, some key information found
+- quality 0.6-0.8: Good progress, most information gathered
+- quality 0.8-1.0: Sub-goal is fully satisfied
 
-Recent memories:\n${state.memories.join("\n") || "(none)"}
+Be strict: only mark completed=true when there is concrete evidence the sub-goal is met.
+If not completed, list specifically what information is still missing.`,
+		},
+		{
+			role: "user" as const,
+			content: `Overall goal: ${state.goal}
+Current sub-goal: ${currentSubGoal.description}
 
-Latest result:\n${state.lastResult || "(none)"}
+Facts gathered so far:
+${factsGathered}
 
-Step:\n${state.steps}
+Running context: ${state.worldModel.context || "(none)"}
 
-Decide whether the goal is completed.
-If it is not completed, explain what is still missing.
+Sub-goal result so far: ${currentSubGoal.result || "(none)"}
 
-Return only strict JSON with this shape:
+Steps used: ${state.steps}
+
+Return JSON:
 {
-  "completed": true,
-  "reason": "short reason"
-}`);
+  "completed": true/false,
+  "quality": 0.0 to 1.0,
+  "reason": "explanation",
+  "missingInfo": ["what is still needed"] // only if not completed
+}`,
+		},
+	];
 
-  return evaluationSchema.parse(JSON.parse(extractJson(response)));
+	return askJSON(messages, evaluationSchema);
 }

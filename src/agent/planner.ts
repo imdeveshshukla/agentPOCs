@@ -1,58 +1,89 @@
 import { z } from "zod";
-import { ask } from "../llm/ollama.ts";
-import type { AgentState, PlanAction, Tool } from "./types.ts";
+import { askJSON } from "../llm/ollama.ts";
+import type { AgentState, PlanAction, SubGoal, Tool } from "./types.ts";
+
+// ── Schema ──────────────────────────────────────────────────────────
 
 const planSchema = z.object({
-  tool: z.string().min(1),
-  input: z.string(),
+	tool: z.string().min(1),
+	params: z.record(z.string(), z.unknown()).default({}),
+	reasoning: z.string().min(1),
 });
 
-function extractJson(text: string): string {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
+// ── Tool Description Builder ────────────────────────────────────────
 
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error(`Planner did not return JSON. Raw output: ${text}`);
-  }
-
-  return text.slice(start, end + 1);
+function buildToolDescriptions(tools: Tool[]): string {
+	return tools
+		.map((tool) => {
+			const params =
+				tool.parameters.length > 0
+					? tool.parameters
+							.map((p) => `    - ${p.name} (${p.type}${p.required ? ", required" : ""}): ${p.description}`)
+							.join("\n")
+					: "    (no parameters)";
+			return `• ${tool.name}: ${tool.description}\n  Parameters:\n${params}`;
+		})
+		.join("\n\n");
 }
 
-export async function planner(goal: string, state: AgentState, tools: Tool[]): Promise<PlanAction> {
-  const toolGuidance =
-    tools.length > 0
-      ? tools.map((tool) => `${tool.name}: ${tool.description}`).join("\n")
-      : "(no tools available)";
+// ── Planner ─────────────────────────────────────────────────────────
 
-  const prompt = `You are the planning stage in an agent loop.
-Goal:\n${goal}
+export async function planner(
+	state: AgentState,
+	currentSubGoal: SubGoal,
+	tools: Tool[],
+	monologueReasoning: string,
+	reflectionHint?: string,
+): Promise<PlanAction> {
+	const toolDescriptions = buildToolDescriptions(tools);
 
-Available tools:\n${tools.map((tool) => tool.name).join("\n")}
+	const recentTrace = state.history
+		.slice(-6)
+		.map((entry) => `[${entry.stage}] ${entry.message}`)
+		.join("\n");
 
-Previous observations:\n${state.history.join("\n") || "(none)"}
-Recent memories:\n${state.memories.join("\n") || "(none)"}
-Current step:\n${state.steps}
+	const reflectionContext = reflectionHint ? `\nIMPORTANT — Strategy correction from reflection: ${reflectionHint}` : "";
 
-Tool selection rules:
-- Follow the agent loop: reason from the goal, state, memories, and observations, then choose the next action.
-- Use a tool only when it materially advances the goal.
-- If the goal is conversational or can be answered directly without a tool, choose "none".
-- Use searchFiles and readFile only for local repository or file tasks.
-- Never choose a local file tool just because a keyword matches the goal.
-- If you choose a tool, return only the exact tool name from the list above.
+	const messages = [
+		{
+			role: "system" as const,
+			content: `You are the planning engine of an AI research agent. You choose exactly ONE action per turn.
 
-Return only strict JSON with this shape:
+Rules:
+- Select the tool that best advances the current sub-goal.
+- If the sub-goal can be answered directly from known facts without a tool, use tool "none" with empty params.
+- ALWAYS provide "reasoning" explaining why you chose this tool and these parameters.
+- Use ONLY tools from the available list. Do not invent tool names.
+- Parameters must match the tool's expected parameter names and types.
+${reflectionContext}`,
+		},
+		{
+			role: "user" as const,
+			content: `Overall goal: ${state.goal}
+Current sub-goal: ${currentSubGoal.description}
+
+My reasoning (inner monologue):
+${monologueReasoning}
+
+Known facts:
+${state.worldModel.facts.length > 0 ? state.worldModel.facts.map((f) => `  • ${f}`).join("\n") : "  (none)"}
+
+Files already explored: ${state.worldModel.filesExplored.join(", ") || "(none)"}
+
+Recent trace:
+${recentTrace || "(first step)"}
+
+Available tools:
+${toolDescriptions}
+
+Return JSON:
 {
   "tool": "tool-name-or-none",
-  "input": "tool-input"
-}
+  "params": { "paramName": "value" },
+  "reasoning": "why this action advances the sub-goal"
+}`,
+		},
+	];
 
-Do not include markdown or explanation.`;
-
-  const promptWithDescriptions = `${prompt}\n\nAvailable tool details:\n${toolGuidance}`;
-
-  const raw = await ask(promptWithDescriptions);
-  const parsed = JSON.parse(extractJson(raw));
-
-  return planSchema.parse(parsed);
+	return askJSON(messages, planSchema);
 }

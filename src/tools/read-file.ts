@@ -5,26 +5,46 @@ import { resolveAccessiblePath } from "./safe-fs.ts";
 const MAX_CHARS = 8000;
 
 export const readFileTool: Tool = {
-  name: "readFile",
-  description: "Read a file relative to the project root. Input format: path/to/file",
-  async execute(input: string): Promise<string> {
-    const relativePath = input.trim();
+	name: "readFile",
+	description: "Read a file relative to the project root. Returns the file contents (truncated if very large).",
+	parameters: [
+		{
+			name: "path",
+			type: "string",
+			description: "Relative path to the file from the project root",
+			required: true,
+		},
+	],
+	async execute(params: Record<string, unknown>) {
+		const relativePath = String(params.path ?? "").trim();
 
-    if (!relativePath) {
-      return "readFile requires a non-empty file path";
-    }
+		if (!relativePath) {
+			return { success: false, data: "readFile requires a non-empty file path" };
+		}
 
-    const fullPath = resolveAccessiblePath(relativePath);
+		const fullPath = resolveAccessiblePath(relativePath);
 
-    try {
-      const content = await fs.readFile(fullPath, "utf8");
-      if (content.length <= MAX_CHARS) {
-        return content;
-      }
+		try {
+			const content = await fs.readFile(fullPath, "utf8");
 
-      return `${content.slice(0, MAX_CHARS)}\n\n[truncated to ${MAX_CHARS} chars]`;
-    } catch (error) {
-      return `Failed to read file: ${relativePath}. ${(error as Error).message}`;
-    }
-  },
+			if (content.length <= MAX_CHARS) {
+				return {
+					success: true,
+					data: content,
+					metadata: { path: relativePath, chars: content.length },
+				};
+			}
+
+			return {
+				success: true,
+				data: `${content.slice(0, MAX_CHARS)}\n\n[truncated to ${MAX_CHARS} chars]`,
+				metadata: { path: relativePath, chars: content.length, truncated: true },
+			};
+		} catch (error) {
+			return {
+				success: false,
+				data: `Failed to read file: ${relativePath}. ${(error as Error).message}`,
+			};
+		}
+	},
 };

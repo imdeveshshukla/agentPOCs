@@ -1,282 +1,212 @@
-I'd structure it as a real project, not a tutorial project. The goal is that after 2-3 weeks you can keep extending it without rewriting everything.
+# 🤖 Local Agent — Intelligent CLI Research Assistant
 
-Create Project
-bun create
+An agentic CLI that can search files, read content (including PDFs), and summarize findings according to your goals. Built with a multi-stage cognitive architecture for reliable, efficient task completion.
 
-or
+## Architecture
 
-mkdir local-agent
-cd local-agent
+```
+          Goal
+            │
+            ▼
+      ┌─ Decomposer ─┐
+      │  (goal → 1-5  │
+      │   sub-goals)  │
+      └───────┬───────┘
+              │
+     ┌────────┴──── per sub-goal ────┐
+     │  1. Inner Monologue           │
+     │  2. Planner (tool selection)  │
+     │  3. Action Verifier           │
+     │  4. Tool Execution            │
+     │  5. Observation Parser        │
+     │  6. World Model Update        │
+     │  7. Reflector / Self-Critic   │
+     │  8. Sub-Goal Evaluator        │
+     │  9. Continue / Next / Done    │
+     └──────────────────────────────-┘
+              │
+              ▼
+        Synthesizer → Final Answer
+```
 
-bun init -y
+Each stage uses an LLM call (except the Verifier, which is deterministic). The agent reasons about what it knows, plans an action, validates it, executes it, extracts facts, self-critiques, and evaluates progress — all per step.
 
-Install dependencies:
+## Quick Start
 
-bun add ollama commander zod better-sqlite3 chalk
+```bash
+# Install dependencies
+bun install
 
-bun add -d typescript @types/bun
+# Make sure Ollama is running with a model
+ollama pull qwen3:4b
 
-Later:
+# Interactive mode (prompts for workspace directory)
+bun run dev interactive
 
-bun add fast-glob
-bun add pdf-parse
-bun add cheerio
-Project Structure
-local-agent/
+# Research mode with a specific directory
+bun run dev research "find all PDF files and summarize them" --dir "C:\Users\you\Desktop"
 
-├── src
-│
-├── cli
-│   └── index.ts
-│
-├── agent
-│   ├── loop.ts
-│   ├── planner.ts
-│   ├── evaluator.ts
-│   └── types.ts
-│
-├── tools
-│   ├── search-files.ts
-│   ├── read-file.ts
-│   ├── save-note.ts
-│   ├── web-search.ts
-│   └── run-command.ts
-│
-├── llm
-│   └── ollama.ts
-│
-├── memory
-│   ├── db.ts
-│   └── memory.ts
-│
-├── notes
-│
-├── data
-│   └── agent.db
-│
-├── package.json
-├── tsconfig.json
-└── bunfig.toml
-Core Types
+# Direct mode
+bun run dev find all typescript files --dir ./src
+```
 
-src/agent/types.ts
+## Usage
 
-export interface Tool {
-  name: string;
-  description: string;
+### Commands
 
-  execute(input: string): Promise<string>;
-}
+| Command | Description |
+|:--------|:------------|
+| `bun run dev interactive` | Start an interactive session with the agent |
+| `bun run dev research "<goal>"` | Run a one-shot research goal |
+| `bun run dev <goal>` | Direct mode (shortcut for research) |
 
-export interface AgentState {
-  goal: string;
-  steps: number;
-  history: string[];
-}
-Ollama Wrapper
+### Flags
 
-src/llm/ollama.ts
+| Flag | Description |
+|:-----|:------------|
+| `-d, --dir <path>` | Target directory to operate on (default: current directory) |
+| `-m, --max-steps <n>` | Maximum loop iterations (default: 15) |
+| `-q, --quiet` | Suppress per-step logs |
 
-import ollama from "ollama";
+### Examples
 
-export async function ask(prompt: string) {
-  const response = await ollama.chat({
-    model: "qwen3:4b",
-    messages: [
-      {
-        role: "user",
-        content: prompt
-      }
-    ]
-  });
+```bash
+# Search your Desktop for a resume
+bun run dev interactive --dir "C:\Users\deves\Desktop"
+agent> find my latest resume (devesh shukla)
 
-  return response.message.content;
-}
-First Tool
+# Find and summarize test files in a project
+bun run dev research "find all test files and explain what they test" --dir ./
 
-src/tools/search-files.ts
+# Search file contents for a keyword
+bun run dev research "find all files mentioning 'database'" --dir ./src
+```
 
-import fg from "fast-glob";
+## Tools
 
-export const searchFiles = {
-  name: "searchFiles",
+The agent has 6 built-in tools:
 
-  description: "Search files by keyword",
+| Tool | Purpose |
+|:-----|:--------|
+| **searchFiles** | Find files by name pattern across the workspace |
+| **grepFiles** | Search **inside** file contents for text (replaces shell grep/findstr) |
+| **readFile** | Read file contents — auto-extracts text from PDFs, detects binary files |
+| **listDir** | List files and folders in a directory |
+| **runCommand** | Run read-only shell commands (hardened — blocks scripts and escapes) |
+| **saveNote** | Save findings as markdown notes |
 
-  async execute(input: string) {
+### Adding Custom Tools
 
-    const files = await fg("**/*", {
-      cwd: process.cwd()
-    });
+Create a new file in `src/tools/` implementing the `Tool` interface:
 
-    const matches = files.filter(file =>
-      file.toLowerCase().includes(
-        input.toLowerCase()
-      )
-    );
+```typescript
+import type { Tool } from "../agent/types.ts";
 
-    return JSON.stringify(
-      matches.slice(0, 20),
-      null,
-      2
-    );
-  }
+export const myTool: Tool = {
+  name: "myTool",
+  description: "What this tool does",
+  parameters: [
+    {
+      name: "input",
+      type: "string",
+      description: "What this parameter is for",
+      required: true,
+    },
+  ],
+  async execute(params: Record<string, unknown>) {
+    const input = String(params.input ?? "");
+    // ... your logic
+    return { success: true, data: "result string" };
+  },
 };
-Planner
+```
 
-The planner only decides:
+Then register it in `src/cli/index.ts`:
 
-What tool?
-What input?
+```typescript
+import { myTool } from "../tools/my-tool.ts";
 
-src/agent/planner.ts
+const tools = [searchFilesTool, grepFilesTool, readFileTool, listDirTool, runCommandTool, saveNoteTool, myTool];
+```
 
-import { ask } from "../llm/ollama";
+## Project Structure
 
-export async function planner(
-  goal: string,
-  availableTools: string[]
-) {
+```
+src/
+├── cli/
+│   └── index.ts            # CLI entry point (commander)
+├── agent/
+│   ├── runtime.ts           # Main agent loop (9-stage pipeline)
+│   ├── loop.ts              # Public API facade
+│   ├── types.ts             # Type system (Tool, AgentState, WorldModel, Plan)
+│   ├── decomposer.ts        # Goal → sub-goals
+│   ├── monologue.ts         # Pre-planning reasoning
+│   ├── planner.ts           # Tool selection
+│   ├── verifier.ts          # Deterministic action validation
+│   ├── observer.ts          # Fact extraction from tool output
+│   ├── reflector.ts         # Self-critique + strategy pivots
+│   ├── evaluator.ts         # Sub-goal completion check
+│   └── synthesizer.ts       # Final answer assembly
+├── tools/
+│   ├── search-files.ts      # File name search (fast-glob)
+│   ├── grep-files.ts        # File content search
+│   ├── read-file.ts         # Smart reader (PDF text extraction)
+│   ├── list-dir.ts          # Directory listing
+│   ├── run-command.ts       # Shell commands (hardened)
+│   ├── saveNote.ts          # Markdown note saving
+│   └── safe-fs.ts           # Path resolution + access control
+├── llm/
+│   └── ollama.ts            # LLM wrapper (chat, askJSON with Zod)
+├── memory/
+│   ├── db.ts                # SQLite setup
+│   └── memory.ts            # Tiered memory (facts, trajectories)
+├── workspace.ts             # Configurable workspace root
+└── sandbox.ts               # Temp file sandbox + cleanup
+```
 
-  const prompt = `
-Goal:
-${goal}
+## Security Model
 
-Available tools:
-${availableTools.join("\n")}
+The agent has multiple layers of protection:
 
-Return JSON:
+| Layer | What It Does |
+|:------|:-------------|
+| **Tool Set** | `writeFile` excluded — agent cannot create arbitrary files |
+| **Planner Rules** | LLM instructed to prefer built-in tools, never script, never escape |
+| **Verifier** | Deterministically blocks `cd ..`, `../`, `python`, `node`, `bun` in commands |
+| **runCommand** | Double-blocks destructive commands + script execution + path traversal |
+| **Sandbox** | Any temp files go to `.agent-tmp/<session>/`, auto-deleted after each run |
 
-{
- "tool":"tool-name",
- "input":"tool-input"
-}
-`;
+## Tech Stack
 
-  return ask(prompt);
-}
-Evaluator
+- **Runtime:** [Bun](https://bun.sh)
+- **LLM:** [Ollama](https://ollama.ai) (default model: `qwen3:4b`)
+- **Structured Output:** [Zod](https://zod.dev) schema validation
+- **File Search:** [fast-glob](https://github.com/mrmlnc/fast-glob)
+- **PDF Parsing:** [pdf-parse](https://www.npmjs.com/package/pdf-parse)
+- **Memory:** SQLite via Bun's built-in `bun:sqlite`
+- **CLI:** [Commander.js](https://github.com/tj/commander.js)
 
-src/agent/evaluator.ts
+## Development
 
-import { ask } from "../llm/ollama";
+```bash
+# Run tests
+bun test
 
-export async function evaluator(
-  goal: string,
-  result: string
-) {
+# Type check
+bunx tsc --noEmit
 
-  const response = await ask(`
-Goal:
-${goal}
+# Run both
+bunx tsc --noEmit && bun test
+```
 
-Result:
-${result}
+## Configuration
 
-Is the goal completed?
+The LLM model is configured in `src/llm/ollama.ts`. Change the model name to use a different Ollama model:
 
-Answer only YES or NO
-`);
+```typescript
+model: "qwen3:4b"  // Change to any model you have pulled
+```
 
-  return response.includes("YES");
-}
-Agent Loop
+## License
 
-src/agent/loop.ts
-
-import { planner } from "./planner";
-import { evaluator } from "./evaluator";
-
-export async function runAgent(
-  goal: string,
-  tools: any[]
-) {
-
-  let lastResult = "";
-
-  for (let step = 0; step < 10; step++) {
-
-    const action = await planner(
-      goal,
-      tools.map(t => t.name)
-    );
-
-    const parsed = JSON.parse(action);
-
-    const tool = tools.find(
-      t => t.name === parsed.tool
-    );
-
-    if (!tool) {
-      throw new Error("Unknown tool");
-    }
-
-    lastResult = await tool.execute(
-      parsed.input
-    );
-
-    const done = await evaluator(
-      goal,
-      lastResult
-    );
-
-    if (done) {
-      return lastResult;
-    }
-  }
-
-  return lastResult;
-}
-CLI
-
-src/cli/index.ts
-
-import { Command } from "commander";
-
-import { runAgent } from "../agent/loop";
-
-import { searchFiles } from "../tools/search-files";
-
-const program = new Command();
-
-program
-  .command("research")
-  .argument("<goal>")
-  .action(async goal => {
-
-    const result =
-      await runAgent(goal, [
-        searchFiles
-      ]);
-
-    console.log(result);
-  });
-
-program.parse();
-package.json
-{
-  "scripts": {
-    "dev": "bun src/cli/index.ts",
-    "start": "bun run src/cli/index.ts"
-  }
-}
-Run
-bun run dev research "find azure files"
-Next Features (in order)
-
-After this works, add:
-
-✓ searchFiles
-✓ readFile
-✓ saveNote
-
-→ webSearch
-→ sqlite memory
-→ command execution
-→ PDF reader
-→ markdown notes
-→ task history
-→ retries
-→ goal tracking
-
-One architectural improvement I'd make immediately: instead of having the planner return free-form JSON, define tool schemas with Zod and force the model to produce structured actions. That will save you a lot of debugging once you add more than 3-4 tools.
+MIT

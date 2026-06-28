@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Tool } from "../agent/types.ts";
-import { resolveAccessiblePath } from "./safe-fs.ts";
+import { getWorkspace } from "../workspace.ts";
 
 function normalizeFileName(raw: string): string {
 	return (
@@ -15,7 +15,7 @@ function normalizeFileName(raw: string): string {
 
 export const saveNoteTool: Tool = {
 	name: "saveNote",
-	description: "Save a note as a markdown file under the notes/ directory.",
+	description: "Save a note as a markdown file under the notes/ directory in the workspace.",
 	parameters: [
 		{
 			name: "title",
@@ -39,7 +39,8 @@ export const saveNoteTool: Tool = {
 			return { success: false, data: "saveNote requires non-empty content" };
 		}
 
-		const noteDir = resolveAccessiblePath("notes");
+		const workspace = getWorkspace();
+		const noteDir = path.resolve(workspace, "notes");
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 		const fileName = `${timestamp}-${title}.md`;
 		const filePath = path.join(noteDir, fileName);
@@ -50,7 +51,7 @@ export const saveNoteTool: Tool = {
 			return {
 				success: true,
 				data: `Saved note: ${fileName}`,
-				metadata: { path: `notes/${fileName}` },
+				metadata: { path: `notes/${fileName}`, fullPath: filePath },
 			};
 		} catch (error) {
 			return {

@@ -110,6 +110,7 @@ export interface AgentConfig {
 	retries?: number;
 	memoryKey?: string;
 	verbose?: boolean;
+	workingDirectory?: string;
 }
 
 export type RunAgentOptions = AgentConfig;

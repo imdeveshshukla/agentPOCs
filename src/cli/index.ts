@@ -23,12 +23,14 @@ program
 	.command("research")
 	.description("Run the agent loop for a research goal")
 	.argument("<goal>", "The user goal for the agent")
+	.option("-d, --dir <path>", "Target directory to operate on (default: current directory)")
 	.option("-m, --max-steps <number>", "Maximum loop iterations", "15")
 	.option("-q, --quiet", "Suppress per-step logs", false)
-	.action(async (goal: string, options: { maxSteps: string; quiet: boolean }) => {
+	.action(async (goal: string, options: { dir?: string; maxSteps: string; quiet: boolean }) => {
 		const result = await runAgent(goal, tools, {
 			maxSteps: Number.parseInt(options.maxSteps, 10),
 			verbose: !options.quiet,
+			workingDirectory: options.dir,
 		});
 
 		console.log("\n━━━ Final Result ━━━\n");
@@ -38,11 +40,13 @@ program
 program
 	.command("interactive")
 	.description("Start an interactive agent session")
-	.action(async () => {
+	.option("-d, --dir <path>", "Target directory to operate on (default: current directory)")
+	.action(async (options: { dir?: string }) => {
 		const readline = await import("node:readline/promises");
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-		console.log("🤖 Intelligent Agent v0.2 — type 'exit' to quit\n");
+		const workDir = options.dir ? ` [dir: ${options.dir}]` : "";
+		console.log(`🤖 Intelligent Agent v0.2${workDir} — type 'exit' to quit\n`);
 
 		while (true) {
 			const goal = await rl.question("agent> ");
@@ -54,7 +58,7 @@ program
 				continue;
 			}
 
-			const agent = new Agent(tools, { verbose: true });
+			const agent = new Agent(tools, { verbose: true, workingDirectory: options.dir });
 			const result = await agent.run(goal);
 			console.log(`\n━━━ Answer ━━━\n${result}\n`);
 		}
@@ -72,8 +76,20 @@ const directGoal =
 	firstArg !== "help";
 
 if (directGoal) {
-	const goal = argv.join(" ");
-	const agent = new Agent(tools, { verbose: true });
+	// Check for --dir flag in direct mode
+	const dirIndex = argv.indexOf("--dir");
+	const dirShortIndex = argv.indexOf("-d");
+	const dirFlagIndex = dirIndex !== -1 ? dirIndex : dirShortIndex;
+	let workingDirectory: string | undefined;
+	const filteredArgs = [...argv];
+
+	if (dirFlagIndex !== -1 && dirFlagIndex + 1 < argv.length) {
+		workingDirectory = argv[dirFlagIndex + 1];
+		filteredArgs.splice(dirFlagIndex, 2);
+	}
+
+	const goal = filteredArgs.join(" ");
+	const agent = new Agent(tools, { verbose: true, workingDirectory });
 
 	const result = await agent.run(goal);
 	console.log("\n━━━ Final Result ━━━\n");

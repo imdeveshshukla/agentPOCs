@@ -1,16 +1,18 @@
 import { $ } from "bun";
 import type { Tool } from "../agent/types.ts";
+import { getWorkspace } from "../workspace.ts";
 
 const BLOCKED = ["rm -rf", "del /f", "format ", "shutdown ", "reboot ", "mkfs", "dd if="];
 
 export const runCommandTool: Tool = {
 	name: "runCommand",
-	description: "Run a shell command in the current workspace. Keep commands read-only when possible.",
+	description:
+		"Run a shell command inside the workspace directory. Use for searching files by content (e.g. findstr, grep), checking file dates, or other operations. Commands run with the workspace as the working directory.",
 	parameters: [
 		{
 			name: "command",
 			type: "string",
-			description: "The shell command to execute",
+			description: "The shell command to execute (runs inside the workspace directory)",
 			required: true,
 		},
 	],
@@ -26,8 +28,10 @@ export const runCommandTool: Tool = {
 			return { success: false, data: "Blocked unsafe command" };
 		}
 
+		const workspace = getWorkspace();
+
 		try {
-			const result = await $`${{ raw: command }}`.quiet();
+			const result = await $`${{ raw: command }}`.cwd(workspace).quiet();
 			const stdout = result.stdout.toString().trim();
 			const stderr = result.stderr.toString().trim();
 
@@ -35,14 +39,14 @@ export const runCommandTool: Tool = {
 				return {
 					success: true,
 					data: `stderr:\n${stderr}\n\nstdout:\n${stdout}`,
-					metadata: { command, hasStderr: true },
+					metadata: { command, workspace, hasStderr: true },
 				};
 			}
 
 			return {
 				success: true,
 				data: stdout || "Command completed with no output",
-				metadata: { command },
+				metadata: { command, workspace },
 			};
 		} catch (error) {
 			return {

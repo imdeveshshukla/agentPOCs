@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import { ask } from "../llm/ollama.ts";
 import { getLatestMemories, saveMemory, saveTrajectory } from "../memory/memory.ts";
+import { getWorkspace, setWorkspace } from "../workspace.ts";
 import { decomposeGoal, getCurrentSubGoal, advancePlan, markSubGoalFailed } from "./decomposer.ts";
 import { evaluator } from "./evaluator.ts";
 import { innerMonologue } from "./monologue.ts";
@@ -48,6 +49,7 @@ export class Agent {
 			retries: config.retries ?? 1,
 			memoryKey: config.memoryKey ?? "default",
 			verbose: config.verbose ?? false,
+			workingDirectory: config.workingDirectory ?? process.cwd(),
 		};
 	}
 
@@ -58,17 +60,26 @@ export class Agent {
 			}
 		};
 
+		// ── Set workspace ───────────────────────────────────────────
+
+		setWorkspace(this.config.workingDirectory);
+		const workspace = getWorkspace();
+
 		// ── Initialize State ────────────────────────────────────────
 
 		const recentMemories = getLatestMemories(this.config.memoryKey, 8).map((row) => row.value);
 
 		log("INIT", `Goal: "${goal}"`, chalk.bold);
+		log("INIT", `Workspace: ${workspace}`, chalk.bold);
+
+		// Augment goal with workspace context so the LLM knows where to look
+		const augmentedGoal = `${goal}\n\n[Workspace directory: ${workspace}. All file paths are relative to this directory. Use relative paths with tools.]`;
 
 		// ── Step 0: Goal Decomposition ──────────────────────────────
 
 		log("DECOMPOSE", "Breaking goal into sub-goals...", chalk.magenta);
 		const plan = await withRetries("decomposer", this.config.retries, () =>
-			decomposeGoal(goal, this.tools),
+			decomposeGoal(augmentedGoal, this.tools),
 		);
 
 		if (this.config.verbose) {
@@ -79,7 +90,7 @@ export class Agent {
 		}
 
 		const worldModel: WorldModel = {
-			facts: [],
+			facts: [`Workspace directory is: ${workspace}`],
 			hypotheses: [],
 			failures: [],
 			filesExplored: [],
@@ -87,7 +98,7 @@ export class Agent {
 		};
 
 		const state: AgentState = {
-			goal,
+			goal: augmentedGoal,
 			plan,
 			worldModel,
 			steps: 0,

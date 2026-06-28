@@ -1,20 +1,25 @@
 import path from "node:path";
-
-export const READ_ONLY_BLOCKED_MESSAGE = "Write and delete operations are disabled in read-only mode.";
-
-export function getAllowedRoot(): string {
-  return path.parse(process.cwd()).root || path.parse(path.resolve("/")).root;
-}
+import { getWorkspace } from "../workspace.ts";
 
 export function resolveAccessiblePath(input: string): string {
-  const raw = input.trim();
-  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
-  const allowedRoot = getAllowedRoot();
-  const relative = path.relative(allowedRoot, resolved);
+	const raw = input.trim();
+	const workspace = getWorkspace();
 
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
-    return resolved;
-  }
+	// If the path is absolute, use it directly but still check bounds
+	const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(workspace, raw);
 
-  throw new Error(`Access denied: ${input} is outside the allowed root ${allowedRoot}`);
+	// Allow anything under the workspace root
+	const relative = path.relative(workspace, resolved);
+	if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+		return resolved;
+	}
+
+	// Also allow the filesystem root for absolute paths the user explicitly provides
+	const fsRoot = path.parse(workspace).root;
+	const relativeToRoot = path.relative(fsRoot, resolved);
+	if (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot)) {
+		return resolved;
+	}
+
+	throw new Error('Access denied: "' + input + '" resolves outside the workspace root "' + workspace + '"');
 }

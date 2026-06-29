@@ -81,5 +81,29 @@ export function verifyAction(
 		};
 	}
 
+	// 5. runCommand-specific safety checks
+	if (action.tool === "runCommand" && typeof action.params.command === "string") {
+		const cmd = action.params.command.toLowerCase();
+
+		// Block directory escapes
+		if (cmd.includes("cd ..") || cmd.includes("../") || cmd.includes("..\\")) {
+			return {
+				valid: false,
+				error: 'Directory escape ("..") is not allowed in runCommand. All operations must stay within the workspace. Use searchFiles or listDir with relative paths instead.',
+			};
+		}
+
+		// Block script execution
+		const scriptPatterns = ["python ", "python3 ", "node ", "bun ", "deno ", "tsx ", "npx "];
+		for (const pattern of scriptPatterns) {
+			if (cmd.startsWith(pattern) || cmd.includes(` && ${pattern}`) || cmd.includes(` ; ${pattern}`)) {
+				return {
+					valid: false,
+					error: `Script execution ("${pattern.trim()}") is not allowed. Use built-in tools (searchFiles, grepFiles, readFile) instead of writing and running scripts.`,
+				};
+			}
+		}
+	}
+
 	return { valid: true };
 }

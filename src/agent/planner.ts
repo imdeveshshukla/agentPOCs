@@ -55,6 +55,15 @@ Rules:
 - ALWAYS provide "reasoning" explaining why you chose this tool and these parameters.
 - Use ONLY tools from the available list. Do not invent tool names.
 - Parameters must match the tool's expected parameter names and types.
+
+CRITICAL tool selection rules:
+- ALWAYS prefer built-in tools (searchFiles, grepFiles, readFile, listDir) over runCommand.
+- To find files by name: use searchFiles.
+- To search INSIDE files for text: use grepFiles. NEVER use runCommand with findstr/grep/dir.
+- To read file contents: use readFile. It automatically handles PDFs.
+- NEVER use runCommand to write or execute scripts (python, node, etc.).
+- NEVER use runCommand with "cd .." or "../" — all paths are relative to the workspace.
+- runCommand is ONLY for: checking file dates (dir /od), file sizes, or metadata.
 ${reflectionContext}`,
 		},
 		{

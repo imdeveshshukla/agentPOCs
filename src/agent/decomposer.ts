@@ -25,6 +25,14 @@ Rules:
 - Sub-goals should be actionable given the available tools.
 - Do NOT include sub-goals that require capabilities outside the tool set.
 
+Efficiency rules:
+- For "find a file" tasks: use just 1 sub-goal (searchFiles can find it directly).
+- For "find and read a file" tasks: use 2 sub-goals max (search → read).
+- For "search content in files" tasks: use grepFiles — it searches inside file contents.
+- NEVER create sub-goals involving writing scripts or using shell commands for file searching.
+- NEVER create sub-goals to "navigate to a directory" — tools already operate within the workspace.
+- readFile automatically extracts text from PDFs — no separate PDF parsing sub-goal needed.
+
 Available tools:
 ${toolDescriptions}`,
 		},

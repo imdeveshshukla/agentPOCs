@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import { ask } from "../llm/ollama.ts";
 import { getLatestMemories, saveMemory, saveTrajectory } from "../memory/memory.ts";
+import { cleanupSandbox } from "../sandbox.ts";
 import { getWorkspace, setWorkspace } from "../workspace.ts";
 import { decomposeGoal, getCurrentSubGoal, advancePlan, markSubGoalFailed } from "./decomposer.ts";
 import { evaluator } from "./evaluator.ts";
@@ -291,6 +292,9 @@ export class Agent {
 			.map((e) => e.message)
 			.join(" → ");
 		saveTrajectory(this.config.memoryKey, goal, stepsUsed, finalAnswer.slice(0, 500));
+
+		// Clean up any temp files the agent created
+		cleanupSandbox();
 
 		return finalAnswer;
 	}

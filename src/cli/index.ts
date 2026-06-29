@@ -1,23 +1,25 @@
 #!/usr/bin/env bun
 
+import path from "node:path";
 import { Command } from "commander";
 import { Agent } from "../agent/runtime.ts";
 import { runAgent } from "../agent/loop.ts";
 import { readFileTool } from "../tools/read-file.ts";
 import { saveNoteTool } from "../tools/saveNote.ts";
 import { searchFilesTool } from "../tools/search-files.ts";
-import { writeFileTool } from "../tools/write-file.ts";
 import { listDirTool } from "../tools/list-dir.ts";
 import { runCommandTool } from "../tools/run-command.ts";
+import { grepFilesTool } from "../tools/grep-files.ts";
 
-const tools = [searchFilesTool, readFileTool, saveNoteTool, writeFileTool, listDirTool, runCommandTool];
+// writeFile intentionally excluded — agent should not create arbitrary files
+const tools = [searchFilesTool, grepFilesTool, readFileTool, listDirTool, runCommandTool, saveNoteTool];
 
 const program = new Command();
 
 program
 	.name("local-agent")
 	.description("An intelligent CLI agent with goal decomposition, reflection, and world model")
-	.version("0.2.0");
+	.version("0.3.0");
 
 program
 	.command("research")
@@ -27,10 +29,17 @@ program
 	.option("-m, --max-steps <number>", "Maximum loop iterations", "15")
 	.option("-q, --quiet", "Suppress per-step logs", false)
 	.action(async (goal: string, options: { dir?: string; maxSteps: string; quiet: boolean }) => {
+		const workDir = options.dir ? path.resolve(options.dir) : process.cwd();
+
+		if (!options.dir) {
+			console.log(`⚠️  No --dir specified. Working in: ${workDir}`);
+			console.log(`   Use --dir <path> to target a specific directory.\n`);
+		}
+
 		const result = await runAgent(goal, tools, {
 			maxSteps: Number.parseInt(options.maxSteps, 10),
 			verbose: !options.quiet,
-			workingDirectory: options.dir,
+			workingDirectory: workDir,
 		});
 
 		console.log("\n━━━ Final Result ━━━\n");
@@ -40,13 +49,24 @@ program
 program
 	.command("interactive")
 	.description("Start an interactive agent session")
-	.option("-d, --dir <path>", "Target directory to operate on (default: current directory)")
+	.option("-d, --dir <path>", "Target directory to operate on")
 	.action(async (options: { dir?: string }) => {
 		const readline = await import("node:readline/promises");
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-		const workDir = options.dir ? ` [dir: ${options.dir}]` : "";
-		console.log(`🤖 Intelligent Agent v0.2${workDir} — type 'exit' to quit\n`);
+		let workDir: string;
+
+		if (options.dir) {
+			workDir = path.resolve(options.dir);
+		} else {
+			// Prompt user for workspace directory
+			const defaultDir = process.cwd();
+			const answer = await rl.question(`📁 Workspace directory [${defaultDir}]: `);
+			workDir = answer.trim() ? path.resolve(answer.trim()) : defaultDir;
+		}
+
+		console.log(`\n🤖 Intelligent Agent v0.3 — workspace: ${workDir}`);
+		console.log(`   Type 'exit' to quit\n`);
 
 		while (true) {
 			const goal = await rl.question("agent> ");
@@ -58,7 +78,7 @@ program
 				continue;
 			}
 
-			const agent = new Agent(tools, { verbose: true, workingDirectory: options.dir });
+			const agent = new Agent(tools, { verbose: true, workingDirectory: workDir });
 			const result = await agent.run(goal);
 			console.log(`\n━━━ Answer ━━━\n${result}\n`);
 		}
@@ -86,6 +106,10 @@ if (directGoal) {
 	if (dirFlagIndex !== -1 && dirFlagIndex + 1 < argv.length) {
 		workingDirectory = argv[dirFlagIndex + 1];
 		filteredArgs.splice(dirFlagIndex, 2);
+	}
+
+	if (!workingDirectory) {
+		console.log(`⚠️  No --dir specified. Working in: ${process.cwd()}\n`);
 	}
 
 	const goal = filteredArgs.join(" ");
